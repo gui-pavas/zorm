@@ -136,3 +136,20 @@ Documentation Index:
 ## Status
 
 Core APIs are implemented and tested. Some advanced capabilities (transactions, introspection, prepared statement protocol, richer schema ops) are natural next additions.
+
+## How To Contribute
+
+1. Fork the repository and create a feature branch.
+2. Make focused changes with clear commit messages.
+3. Run tests locally before opening a PR:
+
+```bash
+zig build test
+```
+
+4. If you add or change behavior, add or update tests in `src/`.
+5. If you add or change public APIs, update docs in `README.md` and `docs/`.
+6. Open a pull request with:
+   - a short problem statement
+   - a summary of what changed
+   - notes about dialect-specific behavior (if relevant)
