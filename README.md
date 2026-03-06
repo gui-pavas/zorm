@@ -37,6 +37,29 @@ Run CLI help:
 zig build run -- help
 ```
 
+### Install Via `zig fetch`
+
+
+```bash
+zig fetch --save https://github.com/<owner>/zorm/archive/refs/tags/v1.0.0.tar.gz
+```
+
+Then wire the dependency into your build:
+
+```zig
+const dep = b.dependency("zorm", .{
+    .target = target,
+    .optimize = optimize,
+});
+b.root_module.addImport("zorm", dep.module("zorm"));
+```
+
+And import in code:
+
+```zig
+const zorm = @import("zorm");
+```
+
 ## CLI
 
 Create migration:
@@ -137,7 +160,7 @@ Documentation Index:
 
 ## Status
 
-Core APIs are implemented and tested. Some advanced capabilities (transactions, introspection, prepared statement protocol, richer schema ops) are natural next additions.
+Core APIs are implemented and tested. Some advanced capabilities (transactions, introspection, prepared statement protocol, richer schema ops) are yet to be implemented.
 
 ## How To Contribute
 

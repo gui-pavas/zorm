@@ -27,7 +27,19 @@ zig build run -- help
 Expose the `zorm` module in your Zig build and import with:
 
 ```zig
+const dep = b.dependency("zorm", .{
+    .target = target,
+    .optimize = optimize,
+});
+b.root_module.addImport("zorm", dep.module("zorm"));
+
 const zorm = @import("zorm");
+```
+
+Add the dependency with:
+
+```bash
+zig fetch --save https://github.com/gui-pavas/zorm/archive/refs/tags/v0.1.0.tar.gz
 ```
 
 ## Next
