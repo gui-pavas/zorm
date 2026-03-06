@@ -1,4 +1,4 @@
-[zorm_badge](./assets/badge.png)
+![zorm_badge](./assets/badge.png)
 
 # zorm
 
