@@ -14,9 +14,12 @@ zorm is a lightweight Zig ORM toolkit focused on explicit SQL workflows.
 - Dialect abstraction (`postgres`, `mysql`, `sqlite`, `mariadb`, `cassandra`)
 - Query builder with typed value params
 - Generic `Driver` + concrete adapters
+- Transaction primitives and prepared statements
+- Driver-level schema introspection hooks
 - Migration runner with pluggable store
 - Seeder runner with pluggable store
 - Schema DSL (`table`, `column`, `index`, `foreignKey`) compiled to SQL
+- Richer schema compile operations (`drop/rename/alter/index ops`)
 
 ## Module Layout
 

@@ -116,6 +116,139 @@ pub fn compileCreateTable(allocator: std.mem.Allocator, dialect: Dialect, spec: 
     };
 }
 
+pub fn compileDropTableSql(
+    allocator: std.mem.Allocator,
+    dialect: Dialect,
+    table_name: []const u8,
+    if_exists: bool,
+    cascade: bool,
+) ![]const u8 {
+    var sql = std.ArrayList(u8).empty;
+    defer sql.deinit(allocator);
+
+    const quoted_table = try dialect.quotedIdentifier(allocator, table_name);
+    defer allocator.free(quoted_table);
+
+    try sql.appendSlice(allocator, "DROP TABLE ");
+    if (if_exists) try sql.appendSlice(allocator, "IF EXISTS ");
+    try sql.appendSlice(allocator, quoted_table);
+
+    if (cascade and dialect == .postgres) {
+        try sql.appendSlice(allocator, " CASCADE");
+    }
+
+    try sql.appendSlice(allocator, ";");
+    return sql.toOwnedSlice(allocator);
+}
+
+pub fn compileRenameTableSql(
+    allocator: std.mem.Allocator,
+    dialect: Dialect,
+    from_table: []const u8,
+    to_table: []const u8,
+) ![]const u8 {
+    const quoted_from = try dialect.quotedIdentifier(allocator, from_table);
+    defer allocator.free(quoted_from);
+    const quoted_to = try dialect.quotedIdentifier(allocator, to_table);
+    defer allocator.free(quoted_to);
+
+    return std.fmt.allocPrint(
+        allocator,
+        "ALTER TABLE {s} RENAME TO {s};",
+        .{ quoted_from, quoted_to },
+    );
+}
+
+pub fn compileAddColumnSql(
+    allocator: std.mem.Allocator,
+    dialect: Dialect,
+    table_name: []const u8,
+    col: Column,
+) ![]const u8 {
+    const quoted_table = try dialect.quotedIdentifier(allocator, table_name);
+    defer allocator.free(quoted_table);
+    const col_sql = try compileColumnSql(allocator, dialect, col);
+    defer allocator.free(col_sql);
+
+    return std.fmt.allocPrint(
+        allocator,
+        "ALTER TABLE {s} ADD COLUMN {s};",
+        .{ quoted_table, col_sql },
+    );
+}
+
+pub fn compileDropColumnSql(
+    allocator: std.mem.Allocator,
+    dialect: Dialect,
+    table_name: []const u8,
+    column_name: []const u8,
+) ![]const u8 {
+    if (dialect == .sqlite or dialect == .cassandra) return SchemaError.UnsupportedFeature;
+
+    const quoted_table = try dialect.quotedIdentifier(allocator, table_name);
+    defer allocator.free(quoted_table);
+    const quoted_column = try dialect.quotedIdentifier(allocator, column_name);
+    defer allocator.free(quoted_column);
+
+    return std.fmt.allocPrint(
+        allocator,
+        "ALTER TABLE {s} DROP COLUMN {s};",
+        .{ quoted_table, quoted_column },
+    );
+}
+
+pub fn compileRenameColumnSql(
+    allocator: std.mem.Allocator,
+    dialect: Dialect,
+    table_name: []const u8,
+    from_column: []const u8,
+    to_column: []const u8,
+) ![]const u8 {
+    if (dialect == .cassandra) return SchemaError.UnsupportedFeature;
+
+    const quoted_table = try dialect.quotedIdentifier(allocator, table_name);
+    defer allocator.free(quoted_table);
+    const quoted_from = try dialect.quotedIdentifier(allocator, from_column);
+    defer allocator.free(quoted_from);
+    const quoted_to = try dialect.quotedIdentifier(allocator, to_column);
+    defer allocator.free(quoted_to);
+
+    return std.fmt.allocPrint(
+        allocator,
+        "ALTER TABLE {s} RENAME COLUMN {s} TO {s};",
+        .{ quoted_table, quoted_from, quoted_to },
+    );
+}
+
+pub fn compileCreateIndexOnTableSql(
+    allocator: std.mem.Allocator,
+    dialect: Dialect,
+    table_name: []const u8,
+    idx: Index,
+) ![]const u8 {
+    return compileCreateIndexSql(allocator, dialect, table_name, idx);
+}
+
+pub fn compileDropIndexSql(
+    allocator: std.mem.Allocator,
+    dialect: Dialect,
+    index_name: []const u8,
+    if_exists: bool,
+) ![]const u8 {
+    const quoted_index = try dialect.quotedIdentifier(allocator, index_name);
+    defer allocator.free(quoted_index);
+
+    var sql = std.ArrayList(u8).empty;
+    defer sql.deinit(allocator);
+
+    try sql.appendSlice(allocator, "DROP INDEX ");
+    if (if_exists and dialect != .cassandra) try sql.appendSlice(allocator, "IF EXISTS ");
+    try sql.appendSlice(allocator, quoted_index);
+    try sql.appendSlice(allocator, ";");
+
+    return sql.toOwnedSlice(allocator);
+}
+
 fn compileCreateTableSql(allocator: std.mem.Allocator, dialect: Dialect, spec: Table) ![]const u8 {
     var sql = std.ArrayList(u8).empty;
     defer sql.deinit(allocator);
@@ -467,4 +600,56 @@ test "cassandra compile requires primary key" {
         SchemaError.MissingPrimaryKey,
         compileCreateTable(std.testing.allocator, .cassandra, spec),
     );
+}
+
+test "postgres compile drop and rename table sql" {
+    const drop_sql = try compileDropTableSql(std.testing.allocator, .postgres, "users", true, true);
+    defer std.testing.allocator.free(drop_sql);
+    try std.testing.expectEqualStrings("DROP TABLE IF EXISTS \"users\" CASCADE;", drop_sql);
+
+    const rename_sql = try compileRenameTableSql(std.testing.allocator, .postgres, "users", "app_users");
+    defer std.testing.allocator.free(rename_sql);
+    try std.testing.expectEqualStrings("ALTER TABLE \"users\" RENAME TO \"app_users\";", rename_sql);
+}
+
+test "mysql compile add and drop column sql" {
+    var col = column("last_login_at", .timestamp);
+    col.nullable = true;
+
+    const add_sql = try compileAddColumnSql(std.testing.allocator, .mysql, "users", col);
+    defer std.testing.allocator.free(add_sql);
+    try std.testing.expectEqualStrings("ALTER TABLE `users` ADD COLUMN `last_login_at` TIMESTAMP;", add_sql);
+
+    const drop_sql = try compileDropColumnSql(std.testing.allocator, .mysql, "users", "last_login_at");
+    defer std.testing.allocator.free(drop_sql);
+    try std.testing.expectEqualStrings("ALTER TABLE `users` DROP COLUMN `last_login_at`;", drop_sql);
+}
+
+test "sqlite drop column sql is unsupported" {
+    try std.testing.expectError(
+        SchemaError.UnsupportedFeature,
+        compileDropColumnSql(std.testing.allocator, .sqlite, "users", "email"),
+    );
+}
+
+test "postgres compile rename column and index operations" {
+    const rename_col_sql = try compileRenameColumnSql(std.testing.allocator, .postgres, "users", "full_name", "name");
+    defer std.testing.allocator.free(rename_col_sql);
+    try std.testing.expectEqualStrings(
+        "ALTER TABLE \"users\" RENAME COLUMN \"full_name\" TO \"name\";",
+        rename_col_sql,
+    );
+
+    var idx = index(&.{"email"});
+    idx.unique = true;
+    const create_idx_sql = try compileCreateIndexOnTableSql(std.testing.allocator, .postgres, "users", idx);
+    defer std.testing.allocator.free(create_idx_sql);
+    try std.testing.expectEqualStrings(
+        "CREATE UNIQUE INDEX \"users_email_uniq\" ON \"users\" (\"email\");",
+        create_idx_sql,
+    );
+
+    const drop_idx_sql = try compileDropIndexSql(std.testing.allocator, .postgres, "users_email_uniq", true);
+    defer std.testing.allocator.free(drop_idx_sql);
+    try std.testing.expectEqualStrings("DROP INDEX IF EXISTS \"users_email_uniq\";", drop_idx_sql);
 }

@@ -2,6 +2,11 @@ const std = @import("std");
 
 pub const Dialect = @import("dialect.zig").Dialect;
 pub const Driver = @import("driver.zig").Driver;
+pub const Transaction = @import("driver.zig").Transaction;
+pub const PreparedStatement = @import("driver.zig").PreparedStatement;
+pub const StringList = @import("driver.zig").StringList;
+pub const ColumnInfo = @import("driver.zig").ColumnInfo;
+pub const ColumnInfoList = @import("driver.zig").ColumnInfoList;
 pub const QueryBuilder = @import("query_builder.zig").QueryBuilder;
 pub const Query = @import("query_builder.zig").Query;
 pub const Value = @import("value.zig").Value;

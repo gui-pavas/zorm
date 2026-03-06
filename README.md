@@ -16,8 +16,12 @@ Supported SQL dialects:
 - Small core with explicit APIs
 - Dialect-aware SQL generation
 - Driver abstraction with concrete adapters
+- Transaction primitives (`BEGIN`/`COMMIT`/`ROLLBACK`)
+- Prepared statement protocol (reusable SQL + bound params)
+- Introspection hooks (`listTables`, `describeTable`)
 - Migration and seeding runners ready for app workflows
 - Schema DSL for `table`, `column`, `index`, and `foreignKey`
+- Richer schema operations (`drop/rename/add/drop column/index`)
 
 ## Install / Build
 
@@ -144,6 +148,71 @@ pub fn compileUsers(allocator: std.mem.Allocator) !void {
 }
 ```
 
+## Transactions + Prepared Statements
+
+```zig
+const std = @import("std");
+const zorm = @import("zorm");
+
+pub fn runTx(allocator: std.mem.Allocator, driver: zorm.Driver) !void {
+    var tx = try driver.beginTransaction();
+    errdefer tx.rollback() catch {};
+
+    var stmt = try driver.prepare(allocator, "INSERT INTO users (email, active) VALUES ($1, $2)");
+    defer stmt.deinit();
+
+    try stmt.execute(&.{
+        .{ .text = "ada@example.com" },
+        .{ .bool = true },
+    });
+
+    try tx.commit();
+}
+```
+
+## Introspection
+
+```zig
+const std = @import("std");
+const zorm = @import("zorm");
+
+pub fn inspect(allocator: std.mem.Allocator, driver: zorm.Driver) !void {
+    var tables = try driver.listTables(allocator, null);
+    defer tables.deinit();
+
+    for (tables.items) |table_name| {
+        std.debug.print("table: {s}\n", .{table_name});
+
+        var cols = try driver.describeTable(allocator, table_name);
+        defer cols.deinit();
+        for (cols.items) |col| {
+            std.debug.print("  - {s} ({s})\n", .{ col.name, col.type_name });
+        }
+    }
+}
+```
+
+## Richer Schema Operations
+
+```zig
+const std = @import("std");
+const zorm = @import("zorm");
+
+pub fn schemaOps(allocator: std.mem.Allocator) !void {
+    var add_col = zorm.schema.column("last_login_at", .timestamp);
+    add_col.nullable = true;
+
+    const add_sql = try zorm.schema.compileAddColumnSql(allocator, .postgres, "users", add_col);
+    defer allocator.free(add_sql);
+
+    const rename_sql = try zorm.schema.compileRenameTableSql(allocator, .postgres, "users", "app_users");
+    defer allocator.free(rename_sql);
+
+    const drop_idx_sql = try zorm.schema.compileDropIndexSql(allocator, .postgres, "users_email_uniq", true);
+    defer allocator.free(drop_idx_sql);
+}
+```
+
 ## Documentation
 
 Documentation Index:
@@ -155,12 +224,17 @@ Documentation Index:
 - [Seeders](docs/seeders.md)
 - [Query Builder](docs/query-builder.md)
 - [Schema Builder](docs/schema-builder.md)
+- [Advanced Features](docs/advanced-features.md)
+- [Transactions](docs/transactions.md)
+- [Prepared Statements](docs/prepared-statements.md)
+- [Introspection](docs/introspection.md)
+- [Schema Operations](docs/schema-operations.md)
 - [CLI](docs/cli.md)
 - [Testing](docs/testing.md)
 
 ## Status
 
-Core APIs are implemented and tested. Some advanced capabilities (transactions, introspection, prepared statement protocol, richer schema ops) are yet to be implemented.
+Core APIs are implemented and tested, including transactions, introspection hooks, prepared statements, and richer schema operations.
 
 ## How To Contribute
 

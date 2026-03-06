@@ -4,10 +4,14 @@ DRM is zorm's runtime database execution model.
 
 ## Generic Driver
 
-`Driver` is a vtable-based abstraction with two operations:
+`Driver` is a vtable-based abstraction with query execution plus transaction/introspection helpers.
 
 - `execute(sql: []const u8)`
 - `executeQuery(query: Query)`
+- `beginTransaction() -> Transaction`
+- `prepare(allocator, sql) -> PreparedStatement`
+- `listTables(allocator, schema)`
+- `describeTable(allocator, table)`
 
 Any backend can be adapted through:
 
@@ -36,6 +40,34 @@ These adapters execute SQL by invoking native database CLI tools.
 
 Literal formatting includes string escaping and dialect-specific blob literal formats.
 
+## Transactions
+
+`beginTransaction()` sends `BEGIN` and returns a `Transaction` handle:
+
+- `commit()` -> sends `COMMIT`
+- `rollback()` -> sends `ROLLBACK`
+
+## Prepared Statement Protocol
+
+`prepare(allocator, sql)` creates a reusable statement object:
+
+```zig
+var stmt = try driver.prepare(allocator, "SELECT * FROM users WHERE id = $1");
+defer stmt.deinit();
+try stmt.execute(&.{.{ .int = 1 }});
+```
+
+The protocol keeps SQL reusable and binds a fresh parameter list per execute call.
+
+## Introspection
+
+Use these hooks for runtime schema inspection:
+
+- `listTables(allocator, schema)` returns table names.
+- `describeTable(allocator, table)` returns `ColumnInfo` entries.
+
+Driver implementations can provide these methods; otherwise `error.UnsupportedFeature` is returned.
+
 ## Example
 
 ```zig
@@ -52,4 +84,4 @@ try driver.execute("SELECT 1");
 
 ## Next
 
-Read [Query Builder](query-builder.md) and [Schema Builder](schema-builder.md).
+Read [Transactions](transactions.md), [Prepared Statements](prepared-statements.md), and [Introspection](introspection.md).

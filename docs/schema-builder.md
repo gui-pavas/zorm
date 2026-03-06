@@ -21,6 +21,16 @@ defer compiled.deinit();
 1. `CREATE TABLE ...`
 2. `CREATE INDEX ...` (one per index)
 
+Additional schema SQL compilers:
+
+- `compileDropTableSql(...)`
+- `compileRenameTableSql(...)`
+- `compileAddColumnSql(...)`
+- `compileDropColumnSql(...)`
+- `compileRenameColumnSql(...)`
+- `compileCreateIndexOnTableSql(...)`
+- `compileDropIndexSql(...)`
+
 ## Example
 
 ```zig
@@ -54,7 +64,9 @@ defer compiled.deinit();
 - Postgres: `SERIAL` / `BIGSERIAL` for auto-increment integer/bigint.
 - SQLite: `INTEGER PRIMARY KEY AUTOINCREMENT` handling.
 - Cassandra: requires at least one primary key; certain FK/index features are restricted.
+- `compileDropColumnSql` is unsupported for `sqlite` and `cassandra`.
+- `compileRenameColumnSql` is unsupported for `cassandra`.
 
 ## Next
 
-See [Migrations](migrations.md) for execution flow.
+See [Schema Operations](schema-operations.md) for alter/drop/rename helpers, then [Migrations](migrations.md) for execution flow.

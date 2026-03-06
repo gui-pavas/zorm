@@ -7,6 +7,77 @@ pub const DriverError = error{
     ExternalCommandFailed,
     MissingDatabasePath,
     UnsupportedFeature,
+    TransactionAlreadyClosed,
+};
+
+pub const StringList = struct {
+    allocator: std.mem.Allocator,
+    items: []const []const u8,
+
+    pub fn deinit(self: *StringList) void {
+        for (self.items) |item| self.allocator.free(item);
+        self.allocator.free(self.items);
+    }
+};
+
+pub const ColumnInfo = struct {
+    name: []const u8,
+    type_name: []const u8,
+    nullable: bool = true,
+    default_value_sql: ?[]const u8 = null,
+    is_primary_key: bool = false,
+};
+
+pub const ColumnInfoList = struct {
+    allocator: std.mem.Allocator,
+    items: []const ColumnInfo,
+
+    pub fn deinit(self: *ColumnInfoList) void {
+        for (self.items) |item| {
+            self.allocator.free(item.name);
+            self.allocator.free(item.type_name);
+            if (item.default_value_sql) |value| self.allocator.free(value);
+        }
+        self.allocator.free(self.items);
+    }
+};
+
+pub const PreparedStatement = struct {
+    allocator: std.mem.Allocator,
+    driver: Driver,
+    sql: []const u8,
+
+    pub fn deinit(self: *PreparedStatement) void {
+        self.allocator.free(self.sql);
+    }
+
+    pub fn execute(self: *const PreparedStatement, params: []const Value) !void {
+        const copied_params = try self.allocator.dupe(Value, params);
+        defer self.allocator.free(copied_params);
+
+        const query = Query{
+            .sql = self.sql,
+            .params = copied_params,
+        };
+        try self.driver.executeQuery(query);
+    }
+};
+
+pub const Transaction = struct {
+    driver: Driver,
+    active: bool = true,
+
+    pub fn commit(self: *Transaction) !void {
+        if (!self.active) return DriverError.TransactionAlreadyClosed;
+        try self.driver.execute("COMMIT");
+        self.active = false;
+    }
+
+    pub fn rollback(self: *Transaction) !void {
+        if (!self.active) return DriverError.TransactionAlreadyClosed;
+        try self.driver.execute("ROLLBACK");
+        self.active = false;
+    }
 };
 
 pub const Driver = struct {
@@ -16,6 +87,8 @@ pub const Driver = struct {
     pub const VTable = struct {
         execute: *const fn (ctx: *anyopaque, sql: []const u8) anyerror!void,
         executeQuery: *const fn (ctx: *anyopaque, query: Query) anyerror!void,
+        listTables: *const fn (ctx: *anyopaque, allocator: std.mem.Allocator, schema: ?[]const u8) anyerror!StringList,
+        describeTable: *const fn (ctx: *anyopaque, allocator: std.mem.Allocator, table: []const u8) anyerror!ColumnInfoList,
     };
 
     pub fn execute(self: Driver, sql: []const u8) !void {
@@ -24,6 +97,27 @@ pub const Driver = struct {
 
     pub fn executeQuery(self: Driver, query: Query) !void {
         return self.vtable.executeQuery(self.ctx, query);
+    }
+
+    pub fn beginTransaction(self: Driver) !Transaction {
+        try self.execute("BEGIN");
+        return .{ .driver = self };
+    }
+
+    pub fn prepare(self: Driver, allocator: std.mem.Allocator, sql: []const u8) !PreparedStatement {
+        return .{
+            .allocator = allocator,
+            .driver = self,
+            .sql = try allocator.dupe(u8, sql),
+        };
+    }
+
+    pub fn listTables(self: Driver, allocator: std.mem.Allocator, schema: ?[]const u8) !StringList {
+        return self.vtable.listTables(self.ctx, allocator, schema);
+    }
+
+    pub fn describeTable(self: Driver, allocator: std.mem.Allocator, table: []const u8) !ColumnInfoList {
+        return self.vtable.describeTable(self.ctx, allocator, table);
     }
 
     pub fn from(comptime T: type, value: *T) Driver {
@@ -37,6 +131,22 @@ pub const Driver = struct {
                 const ptr: *T = @ptrCast(@alignCast(ctx));
                 try ptr.executeQuery(query);
             }
+
+            fn listTables(ctx: *anyopaque, allocator: std.mem.Allocator, schema: ?[]const u8) anyerror!StringList {
+                const ptr: *T = @ptrCast(@alignCast(ctx));
+                if (@hasDecl(T, "listTables")) {
+                    return ptr.listTables(allocator, schema);
+                }
+                return DriverError.UnsupportedFeature;
+            }
+
+            fn describeTable(ctx: *anyopaque, allocator: std.mem.Allocator, table: []const u8) anyerror!ColumnInfoList {
+                const ptr: *T = @ptrCast(@alignCast(ctx));
+                if (@hasDecl(T, "describeTable")) {
+                    return ptr.describeTable(allocator, table);
+                }
+                return DriverError.UnsupportedFeature;
+            }
         };
 
         return .{
@@ -44,6 +154,8 @@ pub const Driver = struct {
             .vtable = &.{
                 .execute = vtable.execute,
                 .executeQuery = vtable.executeQuery,
+                .listTables = vtable.listTables,
+                .describeTable = vtable.describeTable,
             },
         };
     }
@@ -148,20 +260,29 @@ fn runExternal(
     argv: []const []const u8,
     env_map: ?*const std.process.EnvMap,
 ) !void {
+    const stdout = try runExternalCapture(allocator, argv, env_map);
+    allocator.free(stdout);
+}
+
+fn runExternalCapture(
+    allocator: std.mem.Allocator,
+    argv: []const []const u8,
+    env_map: ?*const std.process.EnvMap,
+) ![]u8 {
     const result = try std.process.Child.run(.{
         .allocator = allocator,
         .argv = argv,
         .env_map = env_map,
         .max_output_bytes = 1024 * 1024,
     });
-    defer allocator.free(result.stdout);
     defer allocator.free(result.stderr);
 
     switch (result.term) {
-        .Exited => |code| if (code == 0) return,
+        .Exited => |code| if (code == 0) return result.stdout,
         else => {},
     }
 
+    allocator.free(result.stdout);
     return DriverError.ExternalCommandFailed;
 }
 
@@ -373,6 +494,26 @@ pub const LoggingDriver = struct {
     pub fn executeQuery(self: *LoggingDriver, query: Query) !void {
         try self.logs.append(self.allocator, try self.allocator.dupe(u8, query.sql));
     }
+
+    pub fn listTables(self: *LoggingDriver, allocator: std.mem.Allocator, schema: ?[]const u8) !StringList {
+        _ = self;
+        _ = schema;
+        const items = try allocator.alloc([]const u8, 0);
+        return .{
+            .allocator = allocator,
+            .items = items,
+        };
+    }
+
+    pub fn describeTable(self: *LoggingDriver, allocator: std.mem.Allocator, table: []const u8) !ColumnInfoList {
+        _ = self;
+        _ = table;
+        const items = try allocator.alloc(ColumnInfo, 0);
+        return .{
+            .allocator = allocator,
+            .items = items,
+        };
+    }
 };
 
 test "renderQuery replaces postgres placeholders" {
@@ -403,4 +544,46 @@ test "renderQuery replaces question mark placeholders" {
         "INSERT INTO users (id, name, active) VALUES (7, 'Ada', TRUE)",
         sql,
     );
+}
+
+test "driver prepared statement executes with params" {
+    var logger = LoggingDriver.init(std.testing.allocator);
+    defer logger.deinit();
+
+    const driver = Driver.from(@TypeOf(logger), &logger);
+    var stmt = try driver.prepare(std.testing.allocator, "SELECT * FROM users WHERE id = $1");
+    defer stmt.deinit();
+
+    try stmt.execute(&.{.{ .int = 99 }});
+
+    try std.testing.expectEqual(@as(usize, 1), logger.logs.items.len);
+    try std.testing.expectEqualStrings("SELECT * FROM users WHERE id = $1", logger.logs.items[0]);
+}
+
+test "driver transaction commit emits commands" {
+    var logger = LoggingDriver.init(std.testing.allocator);
+    defer logger.deinit();
+
+    const driver = Driver.from(@TypeOf(logger), &logger);
+    var tx = try driver.beginTransaction();
+    try tx.commit();
+
+    try std.testing.expectEqual(@as(usize, 2), logger.logs.items.len);
+    try std.testing.expectEqualStrings("BEGIN", logger.logs.items[0]);
+    try std.testing.expectEqualStrings("COMMIT", logger.logs.items[1]);
+}
+
+test "driver introspection falls back to implementation" {
+    var logger = LoggingDriver.init(std.testing.allocator);
+    defer logger.deinit();
+
+    const driver = Driver.from(@TypeOf(logger), &logger);
+
+    var tables = try driver.listTables(std.testing.allocator, null);
+    defer tables.deinit();
+    try std.testing.expectEqual(@as(usize, 0), tables.items.len);
+
+    var columns = try driver.describeTable(std.testing.allocator, "users");
+    defer columns.deinit();
+    try std.testing.expectEqual(@as(usize, 0), columns.items.len);
 }
