@@ -1,3 +1,5 @@
+[zorm_badge](./assets/badge.png)
+
 # zorm
 
 A lightweight Zig ORM toolkit with a typed query builder, migration/seeder runners, pluggable drivers, and a schema DSL that compiles to SQL per dialect.
